@@ -1,6 +1,7 @@
+
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { PageWrapper } from '@/components/layout/PageWrapper';
 import { useMqtt } from '@/hooks/useMqtt';
@@ -27,14 +28,27 @@ export default function StudentPage() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   
-  const [myDrawingData, setMyDrawingData] = useState<string>('data:,'); // Start with empty data URI
+  const [myDrawingData, setMyDrawingData] = useState<string>('data:,');
   const [opponentDrawingData, setOpponentDrawingData] = useState<string>('https://placehold.co/400x300.png?text=Waiting...');
   
   const [results, setResults] = useState<EvaluateDrawingsOutput | null>(null);
   const { toast } = useToast();
 
-  const handleMqttMessage = useCallback((receivedTopic: string, message: MqttMessage) => {
+  const handleMqttMessageCallbackRef = useRef<((topic: string, message: MqttMessage) => void) | null>(null);
+
+  const stableOnMessageHandler = useCallback((receivedTopic: string, message: MqttMessage) => {
+    if (handleMqttMessageCallbackRef.current) {
+      handleMqttMessageCallbackRef.current(receivedTopic, message);
+    }
+  }, []); // Empty dependency array makes this wrapper stable
+
+  const { publish, isConnected, getClientId } = useMqtt({ 
+    onMessage: stableOnMessageHandler 
+  });
+
+  const currentHandleMqttMessage = useCallback((receivedTopic: string, message: MqttMessage) => {
     console.log("Student received MQTT message:", message);
+    // getClientId() will be called inside switch cases where needed
     switch (message.type) {
       case 'NEW_GAME_ANNOUNCEMENT':
         // If student joins mid-announcement or page reloads
@@ -91,9 +105,13 @@ export default function StudentPage() {
         }
         break;
     }
-  }, [mySlot, gameState, getClientId, toast]);
+  }, [mySlot, gameState, getClientId, toast, setMySlot, setTopic, setGameState, setMyName, setOpponentName, setIsTimerRunning, setTimeLeft, setOpponentDrawingData, setResults]);
 
-  const { publish, isConnected, getClientId } = useMqtt({ onMessage: handleMqttMessage });
+
+  useEffect(() => {
+    handleMqttMessageCallbackRef.current = currentHandleMqttMessage;
+  }, [currentHandleMqttMessage]);
+
 
   const handleJoinGame = () => {
     if (isConnected && getClientId()) {
@@ -188,7 +206,7 @@ export default function StudentPage() {
                       height={canvasHeight} 
                       className="object-contain w-full h-full"
                       data-ai-hint="opponent drawing"
-                      unoptimized={opponentDrawingData.startsWith('data:image')} // Important for data URIs
+                      unoptimized={opponentDrawingData.startsWith('data:image')}
                     />
                   </div>
                 </CardContent>
@@ -220,3 +238,4 @@ export default function StudentPage() {
     </PageWrapper>
   );
 }
+
