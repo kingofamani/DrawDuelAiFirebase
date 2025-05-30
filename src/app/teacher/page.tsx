@@ -33,7 +33,7 @@ const initialPlayerState = (name: string): PlayerInfo => ({
   joined: false,
 });
 
-const MUSIC_URL = '/audio/tense-loop.mp3'; // User needs to replace this file in public/audio
+const MUSIC_URL = '/audio/tense-loop.mp3'; 
 
 
 export default function TeacherPage() {
@@ -41,7 +41,7 @@ export default function TeacherPage() {
   const [topic, setTopic] = useState<string>('');
   const [topicZh, setTopicZh] = useState<string>('');
   const [gameId, setGameId] = useState<string>('');
-  const [gameDurationInSeconds, setGameDurationInSeconds] = useState(60); // Default 1 minute
+  const [gameDurationInSeconds, setGameDurationInSeconds] = useState(60); 
   const [timeLeft, setTimeLeft] = useState(gameDurationInSeconds); 
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   
@@ -54,8 +54,17 @@ export default function TeacherPage() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const { toast } = useToast();
+  const handleMqttMessageCallbackRef = useRef<((topic: string, message: MqttMessage) => void) | null>(null);
 
-  const handleMqttMessage = useCallback((receivedTopic: string, message: MqttMessage) => {
+  const stableOnMessageHandler = useCallback((receivedTopic: string, message: MqttMessage) => {
+    if (handleMqttMessageCallbackRef.current) {
+      handleMqttMessageCallbackRef.current(receivedTopic, message);
+    }
+  }, []);
+
+  const { publish, isConnected } = useMqtt({ onMessage: stableOnMessageHandler });
+  
+  const currentHandleMqttMessage = useCallback((receivedTopic: string, message: MqttMessage) => {
     console.log("Teacher received MQTT message:", message);
     switch (message.type) {
       case 'JOIN_REQUEST':
@@ -79,70 +88,87 @@ export default function TeacherPage() {
         }
         break;
     }
-  }, [player1.joined, player2.joined, topic, topicZh, gameId]); // Dependencies updated in later step by AI
+  }, [player1.joined, player2.joined, topic, topicZh, gameId, publish]); // Added publish to deps
 
-  const { publish, isConnected, getClientId } = useMqtt({ onMessage: handleMqttMessage });
-  
-  // Effect for handling audio playback based on gameState
   useEffect(() => {
-    if (!audioRef.current) {
+    handleMqttMessageCallbackRef.current = currentHandleMqttMessage;
+  }, [currentHandleMqttMessage]);
+  
+  useEffect(() => {
+    const audioNotAlreadyInitialized = !audioRef.current;
+
+    if (audioNotAlreadyInitialized && typeof window !== 'undefined') {
       try {
-        audioRef.current = new Audio(MUSIC_URL);
-        audioRef.current.loop = true;
+        const newAudio = new Audio(MUSIC_URL);
+        newAudio.loop = true;
+        newAudio.onerror = () => {
+          toast({
+            title: 'Audio File Error',
+            description: `Could not load music from ${MUSIC_URL}. Please ensure the file exists in /public/audio and is a valid MP3. You may need to replace the placeholder.`,
+            variant: 'destructive',
+            duration: 10000,
+          });
+          console.error(`Audio element error: Could not load source ${MUSIC_URL}. Check the file exists and is valid.`);
+        };
+        audioRef.current = newAudio;
       } catch (e) {
-          console.error("Failed to initialize audio:", e);
-          toast({ title: 'Audio Error', description: 'Could not load background music.', variant: 'destructive' });
+        console.error("Error creating Audio object:", e);
+        toast({ title: 'Audio Setup Error', description: 'Could not initialize the audio player.', variant: 'destructive' });
       }
     }
     
-    if (audioRef.current) {
+    const currentAudio = audioRef.current;
+
+    if (currentAudio) {
         if (gameState === 'drawing') {
-          audioRef.current.play().catch(error => {
+          currentAudio.play().catch(error => {
             console.error("Error playing audio:", error);
-            // toast({ title: 'Audio Playback Failed', description: 'Could not play background music.', variant: 'default' });
+            if (error.name === 'NotAllowedError') {
+                 toast({ title: 'Music Playback Blocked', description: 'Browser prevented music from playing automatically. Click the page or interact to enable audio.', variant: 'default' });
+            } else if (!currentAudio.error) {
+                 toast({ title: 'Music Playback Failed', description: `Could not play music. ${error.message}. Please ensure a valid MP3 file is at ${MUSIC_URL}.`, variant: 'destructive' });
+            }
           });
         } else {
-          // Pause on judging, results, or if going back to idle.
-          if (['judging', 'results', 'idle'].includes(gameState)) {
-            audioRef.current.pause();
-            audioRef.current.currentTime = 0;
+          currentAudio.pause();
+          if (currentAudio.readyState >= 2 && currentAudio.duration && isFinite(currentAudio.duration) && currentAudio.currentTime > 0) {
+            currentAudio.currentTime = 0;
           }
         }
     }
 
-    // Cleanup audio on component unmount
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
-        // audioRef.current.src = ''; // Keep src to avoid re-download if component re-renders quickly
       }
     };
   }, [gameState, toast]);
 
 
-  const publishPlayerAssigned = (studentId: string, slot: PlayerSlot) => {
+  const publishPlayerAssigned = useCallback((studentId: string, slot: PlayerSlot) => {
     if (topic && topicZh && gameId) {
       publish({
         type: 'PLAYER_ASSIGNED',
         payload: { studentId, slot, topic, topicZh, gameId, assignedName: slot === 'player1' ? "Player 1" : "Player 2" },
       });
     } else {
-      // This case should ideally not happen if new game is always created before assignment
       console.warn("Attempted to publish player assignment without topic/gameId");
        toast({ title: 'Assignment Warning', description: 'Topic or Game ID missing. Cannot assign player fully.', variant: 'default' });
     }
-  };
+  }, [topic, topicZh, gameId, publish, toast]); // Added publish and toast to deps
 
   const handleNewGame = async () => {
     setIsGeneratingTopic(true);
     setResults(null);
     setPlayer1(initialPlayerState("Player 1"));
     setPlayer2(initialPlayerState("Player 2"));
-    setGameState('idle'); // Reset to idle before fetching topic
+    setGameState('idle'); 
 
-    if (audioRef.current) { // Stop music if a new game is started abruptly
+    if (audioRef.current) { 
         audioRef.current.pause();
-        audioRef.current.currentTime = 0;
+        if (audioRef.current.readyState >=2 && audioRef.current.duration && isFinite(audioRef.current.duration) && audioRef.current.currentTime > 0) {
+            audioRef.current.currentTime = 0;
+        }
     }
 
     try {
@@ -159,17 +185,17 @@ export default function TeacherPage() {
     } catch (error) {
       console.error('Failed to generate topic:', error);
       toast({ title: 'Error', description: 'Could not generate a drawing topic.', variant: 'destructive' });
-      setGameState('idle'); // Revert to idle if topic generation fails
+      setGameState('idle'); 
     }
     setIsGeneratingTopic(false);
   };
 
   const handleStartGame = () => {
-    if (player1.joined && player2.joined && topic) { // Ensure topic is also set
+    if (player1.joined && player2.joined && topic) { 
       setGameState('drawing');
       setIsTimerRunning(true);
-      // TimeLeft should already be gameDurationInSeconds from handleNewGame or duration change
-      publish({ type: 'GAME_START', payload: { duration: timeLeft } }); 
+      setTimeLeft(gameDurationInSeconds); // Ensure timeLeft is reset to current duration
+      publish({ type: 'GAME_START', payload: { duration: gameDurationInSeconds } }); 
       toast({ title: 'Game Started!', description: 'Players can now draw.' });
     } else {
       let description = 'Waiting for both players to join.';
@@ -190,21 +216,22 @@ export default function TeacherPage() {
     try {
       if (!topic || !player1.drawingData || !player2.drawingData) {
         toast({ title: 'Evaluation Error', description: 'Missing data (topic or drawings) for evaluation.', variant: 'destructive' });
+        setGameState('waiting_for_players'); // Go back if critical data missing
+        setIsJudging(false);
         throw new Error("Missing data for evaluation.");
       }
-      const drawing1ToEvaluate = player1.drawingData === 'https://placehold.co/400x300.png?text=Joined!' || player1.drawingData === 'https://placehold.co/400x300.png?text=Waiting...' ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' : player1.drawingData; 
-      const drawing2ToEvaluate = player2.drawingData === 'https://placehold.co/400x300.png?text=Joined!' || player2.drawingData === 'https://placehold.co/400x300.png?text=Waiting...' ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' : player2.drawingData;
+      const drawing1ToEvaluate = (player1.drawingData === 'https://placehold.co/400x300.png?text=Joined!' || player1.drawingData === 'https://placehold.co/400x300.png?text=Waiting...' || player1.drawingData === 'data:,') ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' : player1.drawingData; 
+      const drawing2ToEvaluate = (player2.drawingData === 'https://placehold.co/400x300.png?text=Joined!' || player2.drawingData === 'https://placehold.co/400x300.png?text=Waiting...' || player2.drawingData === 'data:,') ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' : player2.drawingData;
 
 
       const aiResults = await evaluateDrawings({
         topic, 
-        topicZh, // Pass topicZh for context if AI model uses it, schema needs update if so
-        drawing1DataUri: drawing1ToEvaluate,
+        drawing1DataUri: drawing1ToEvaluate, // topicZh is not in this schema, it's in the output schema for context
         drawing2DataUri: drawing2ToEvaluate,
       });
       setResults(aiResults);
       setGameState('results');
-      publish({ type: 'GAME_RESULTS', payload: { results: aiResults, topic, topicZh } }); // ensure topicZh is sent
+      publish({ type: 'GAME_RESULTS', payload: { results: aiResults, topic, topicZh } }); 
       toast({ title: 'Judgment Complete!', description: 'Results are in.' });
     } catch (error) {
       console.error('Failed to evaluate drawings:', error);
@@ -265,7 +292,7 @@ export default function TeacherPage() {
               <Mic2 className="w-6 h-6 mr-2"/>
               Game Topic
             </CardTitle>
-             <CardDescription>The topic for the current drawing duel.</CardDescription>
+             <CardDescription>The topic for the current drawing duel. Ensure a valid MP3 audio file is present at /public/audio/tense-loop.mp3 for background music.</CardDescription>
           </CardHeader>
           <CardContent>
             {topic ? (
@@ -318,6 +345,7 @@ export default function TeacherPage() {
                 initialSeconds={timeLeft}
                 isRunning={isTimerRunning}
                 onComplete={handleTimeUp}
+                onTick={setTimeLeft} // Ensure CountdownTimer updates timeLeft for teacher view
                 className="bg-card border border-border"
                 textClassName="text-accent"
               />
@@ -325,7 +353,7 @@ export default function TeacherPage() {
             {!isConnected && (
                 <Card className="border-destructive bg-destructive/10">
                     <CardContent className="p-3">
-                        <p className="text-destructive-foreground text-sm text-center font-semibold">MQTT Disconnected. Please check connection.</p>
+                        <p className="text-destructive-foreground text-sm text-center font-semibold">MQTT Disconnected. Please check connection or refresh.</p>
                     </CardContent>
                 </Card>
             )}

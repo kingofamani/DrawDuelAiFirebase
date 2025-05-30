@@ -18,7 +18,7 @@ import type { EvaluateDrawingsOutput } from '@/ai/flows/evaluate-drawings';
 
 type StudentGameState = 'idle' | 'waiting_for_assignment' | 'ready_to_draw' | 'drawing' | 'judging' | 'results' | 'game_ended_early';
 
-const MUSIC_URL = '/audio/tense-loop.mp3'; // User needs to replace this file in public/audio
+const MUSIC_URL = '/audio/tense-loop.mp3'; 
 
 export default function StudentPage() {
   const [gameState, setGameState] = useState<StudentGameState>('idle');
@@ -29,7 +29,7 @@ export default function StudentPage() {
   const [opponentName, setOpponentName] = useState<string>('Opponent');
   
   const [timeLeft, setTimeLeft] = useState(0);
-  const [isTimerRunning, setIsTimerRunning] = useState(false);
+  // const [isTimerRunning, setIsTimerRunning] = useState(false); // Timer is hidden for student
   
   const [myDrawingData, setMyDrawingData] = useState<string>('data:,');
   const [opponentDrawingData, setOpponentDrawingData] = useState<string>('https://placehold.co/400x300.png?text=Waiting...');
@@ -52,7 +52,6 @@ export default function StudentPage() {
 
   const currentHandleMqttMessage = useCallback((receivedTopic: string, message: MqttMessage) => {
     console.log("Student received MQTT message:", message);
-    // getClientId() will be called inside switch cases where needed
     switch (message.type) {
       case 'NEW_GAME_ANNOUNCEMENT':
         if (gameState === 'idle' || gameState === 'waiting_for_assignment') {
@@ -70,7 +69,7 @@ export default function StudentPage() {
           setGameState('ready_to_draw');
           setMyName(assignPayload.assignedName || (assignPayload.slot === 'player1' ? "Player 1" : "Player 2"));
           setOpponentName(assignPayload.slot === 'player1' ? "Player 2" : "Player 1");
-          toast({ title: 'Joined Game!', description: `You are ${assignPayload.assignedName}. Topic: ${assignPayload.topic}` });
+          toast({ title: 'Joined Game!', description: `You are ${assignPayload.assignedName}. Topic (EN): ${assignPayload.topic}` });
         }
         break;
       case 'GAME_START':
@@ -78,7 +77,6 @@ export default function StudentPage() {
           const startPayload = message.payload as GameStartPayload;
           setTimeLeft(startPayload.duration);
           setGameState('drawing');
-          // Student timer is hidden, setIsTimerRunning(true); 
           toast({ title: 'Game Started!', description: 'Time to draw!' });
         }
         break;
@@ -89,7 +87,6 @@ export default function StudentPage() {
         }
         break;
       case 'TIME_UP':
-        // setIsTimerRunning(false); // Timer hidden for student
         setGameState('judging');
         toast({ title: 'Time Up!', description: 'Waiting for results...' });
         break;
@@ -99,7 +96,6 @@ export default function StudentPage() {
         setTopic(resultsPayload.topic); 
         setTopicZh(resultsPayload.topicZh);
         setGameState('results');
-        // setIsTimerRunning(false); // Timer hidden for student
         break;
       case 'ERROR_MESSAGE':
         const errorPayload = message.payload as ErrorMessagePayload;
@@ -111,7 +107,7 @@ export default function StudentPage() {
         }
         break;
     }
-  }, [mySlot, gameState, getClientId, toast, setMySlot, setTopic, setTopicZh, setGameState, setMyName, setOpponentName, /*setIsTimerRunning,*/ setTimeLeft, setOpponentDrawingData, setResults]);
+  }, [mySlot, gameState, getClientId, toast]);
 
 
   useEffect(() => {
@@ -119,33 +115,60 @@ export default function StudentPage() {
   }, [currentHandleMqttMessage]);
 
   useEffect(() => {
-    if (!audioRef.current) {
+    const audioNotAlreadyInitialized = !audioRef.current;
+
+    if (audioNotAlreadyInitialized && typeof window !== 'undefined') {
       try {
-        audioRef.current = new Audio(MUSIC_URL);
-        audioRef.current.loop = true;
+        const newAudio = new Audio(MUSIC_URL);
+        newAudio.loop = true;
+        newAudio.onerror = () => {
+          toast({
+            title: 'Audio File Error',
+            description: `Could not load music from ${MUSIC_URL}. Please ensure the file exists in /public/audio and is a valid MP3. You may need to replace the placeholder.`,
+            variant: 'destructive',
+            duration: 10000, // Longer duration for important messages
+          });
+          console.error(`Audio element error: Could not load source ${MUSIC_URL}. Check the file exists and is valid.`);
+        };
+        audioRef.current = newAudio;
       } catch (e) {
-        console.error("Failed to initialize audio:", e);
-         toast({ title: 'Audio Error', description: 'Could not load background music.', variant: 'destructive' });
+        console.error("Error creating Audio object:", e);
+        toast({ title: 'Audio Setup Error', description: 'Could not initialize the audio player.', variant: 'destructive' });
       }
     }
 
-    if (audioRef.current) {
-        if (gameState === 'drawing') {
-          audioRef.current.play().catch(error => {
-            console.error("Error playing audio:", error);
-            // toast({ title: 'Audio Playback Failed', description: 'Could not play background music.', variant: 'default' });
-          });
-        } else {
-          audioRef.current.pause();
-          audioRef.current.currentTime = 0;
+    const currentAudio = audioRef.current;
+
+    if (currentAudio) {
+      if (gameState === 'drawing') {
+        currentAudio.play().catch(error => {
+          console.error("Error playing audio:", error);
+          if (error.name === 'NotAllowedError') {
+            toast({
+              title: 'Music Playback Blocked',
+              description: 'Browser prevented music from playing automatically. Click the page or interact to enable audio.',
+              variant: 'default',
+            });
+          } else if (!currentAudio.error) { // Avoid double toast if onerror (e.g. bad source) already fired
+            toast({
+              title: 'Music Playback Failed',
+              description: `Could not play music. ${error.message}. Please ensure a valid MP3 file is at ${MUSIC_URL}.`,
+              variant: 'destructive',
+            });
+          }
+        });
+      } else {
+        currentAudio.pause();
+        // Reset time only if audio has loaded and played, to avoid errors on unplayed/unloaded audio
+        if (currentAudio.readyState >= 2 && currentAudio.duration && isFinite(currentAudio.duration) && currentAudio.currentTime > 0) { 
+             currentAudio.currentTime = 0;
         }
+      }
     }
     
-    // Cleanup audio on component unmount
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
-        // audioRef.current.src = ''; // Keep src to avoid re-download if component re-renders quickly
       }
     };
   }, [gameState, toast]);
@@ -157,7 +180,7 @@ export default function StudentPage() {
       publish({ type: 'JOIN_REQUEST', payload: { studentId: getClientId()! } });
       toast({ title: 'Joining Game', description: 'Waiting for teacher to assign you...' });
     } else {
-      toast({ title: 'MQTT Not Connected', description: 'Cannot join game.', variant: 'destructive' });
+      toast({ title: 'MQTT Not Connected', description: 'Cannot join game. Please wait or refresh.', variant: 'destructive' });
     }
   };
   
@@ -219,12 +242,6 @@ export default function StudentPage() {
               </CardContent>
             </Card>
             
-            {/* Timer is hidden for student during drawing phase
-            {gameState !== 'drawing' && isTimerRunning && (
-                 <CountdownTimer initialSeconds={timeLeft} isRunning={isTimerRunning} className="bg-card border border-border" textClassName="text-accent"/>
-            )}
-            */}
-            
             <div className="flex-grow flex items-start justify-center pt-4">
               {gameState === 'drawing' ? (
                 <div className="flex flex-col items-center justify-start h-full w-full max-w-2xl">
@@ -241,7 +258,7 @@ export default function StudentPage() {
                     </CardContent>
                   </Card>
                 </div>
-              ) : ( // For 'ready_to_draw', 'judging', 'game_ended_early' - show both canvases if data exists
+              ) : ( 
                 <div className="grid md:grid-cols-2 gap-4 h-full w-full">
                   <Card className="h-full flex flex-col">
                     <CardHeader><CardTitle className="flex items-center"><User className="mr-2 w-5 h-5 text-primary"/>{myName}'s Canvas</CardTitle></CardHeader>
@@ -298,7 +315,9 @@ export default function StudentPage() {
                 setResults(null);
                 if (audioRef.current) {
                   audioRef.current.pause();
-                  audioRef.current.currentTime = 0;
+                  if (audioRef.current.duration && isFinite(audioRef.current.duration) && audioRef.current.currentTime > 0) {
+                    audioRef.current.currentTime = 0;
+                  }
                 }
             }} className="mt-8">Play Again?</Button>
         )}
