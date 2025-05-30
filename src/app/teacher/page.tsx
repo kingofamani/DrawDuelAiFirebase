@@ -12,8 +12,10 @@ import type { MqttMessage, PlayerSlot, JoinRequestPayload, DrawingUpdatePayload 
 import { CountdownTimer } from '@/components/game/CountdownTimer';
 import { ResultsDisplay } from '@/components/game/ResultsDisplay';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { UserCheck, Users, Play, RotateCcw, Loader2, Mic2, Eye } from 'lucide-react';
+import { UserCheck, Users, Play, RotateCcw, Loader2, Mic2, Eye, Clock } from 'lucide-react';
 import Image from 'next/image';
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 
 type GameState = 'idle' | 'waiting_for_players' | 'drawing' | 'judging' | 'results';
 
@@ -37,7 +39,8 @@ export default function TeacherPage() {
   const [topic, setTopic] = useState<string>('');
   const [topicZh, setTopicZh] = useState<string>('');
   const [gameId, setGameId] = useState<string>('');
-  const [timeLeft, setTimeLeft] = useState(180); // 3 minutes
+  const [gameDurationInSeconds, setGameDurationInSeconds] = useState(60); // Default 1 minute
+  const [timeLeft, setTimeLeft] = useState(gameDurationInSeconds); 
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   
   const [player1, setPlayer1] = useState<PlayerInfo>(initialPlayerState("Player 1"));
@@ -100,7 +103,7 @@ export default function TeacherPage() {
       setTopicZh(newTopicZh);
       setGameId(newGameId);
       setGameState('waiting_for_players');
-      setTimeLeft(180); // Reset timer
+      setTimeLeft(gameDurationInSeconds); // Reset timer based on configured duration
       setIsTimerRunning(false);
       publish({ type: 'NEW_GAME_ANNOUNCEMENT', payload: { topic: newTopic, topicZh: newTopicZh, gameId: newGameId } });
       toast({ title: 'New Game Created!', description: `Topic (EN): ${newTopic}` });
@@ -115,7 +118,7 @@ export default function TeacherPage() {
     if (player1.joined && player2.joined) {
       setGameState('drawing');
       setIsTimerRunning(true);
-      publish({ type: 'GAME_START', payload: { duration: timeLeft } });
+      publish({ type: 'GAME_START', payload: { duration: timeLeft } }); // timeLeft already reflects gameDurationInSeconds
       toast({ title: 'Game Started!', description: 'Players can now draw.' });
     } else {
       toast({ title: 'Cannot Start Game', description: 'Waiting for both players to join.', variant: 'destructive' });
@@ -184,6 +187,18 @@ export default function TeacherPage() {
       </CardContent>
     </Card>
   );
+  
+  const handleDurationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const minutes = parseInt(event.target.value, 10);
+    if (!isNaN(minutes) && minutes > 0) {
+      setGameDurationInSeconds(minutes * 60);
+      setTimeLeft(minutes*60); // also update timeLeft if game not started
+    } else if (event.target.value === '') {
+       setGameDurationInSeconds(60); // Default to 1 minute if empty
+       setTimeLeft(60);
+    }
+  };
+
 
   return (
     <PageWrapper title="Teacher Dashboard" className="bg-gradient-to-br from-background to-secondary/20">
@@ -212,7 +227,19 @@ export default function TeacherPage() {
           <div className="md:col-span-1 space-y-4">
              <Card className="shadow-md">
                 <CardHeader><CardTitle>Controls</CardTitle></CardHeader>
-                <CardContent className="space-y-2">
+                <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                        <Label htmlFor="game-duration" className="flex items-center"><Clock className="w-4 h-4 mr-2 text-primary"/>Game Duration (minutes)</Label>
+                        <Input
+                            id="game-duration"
+                            type="number"
+                            value={gameDurationInSeconds / 60}
+                            onChange={handleDurationChange}
+                            min="1"
+                            className="w-full"
+                            disabled={gameState === 'drawing' || gameState === 'judging'}
+                        />
+                    </div>
                     <Button
                         onClick={handleNewGame}
                         disabled={isGeneratingTopic || gameState === 'drawing' || gameState === 'judging'}
@@ -284,3 +311,4 @@ export default function TeacherPage() {
     </PageWrapper>
   );
 }
+
