@@ -45,6 +45,7 @@ export interface BaseMqttMessage<T extends MqttMessageType, P> {
 // Specific Message Payloads
 export interface NewGameAnnouncementPayload {
   topic: string;
+  topicZh: string;
   gameId: string; // To potentially differentiate games, though current setup is global
 }
 export type NewGameAnnouncementMessage = BaseMqttMessage<'NEW_GAME_ANNOUNCEMENT', NewGameAnnouncementPayload>;
@@ -60,6 +61,7 @@ export interface PlayerAssignedPayload {
   studentId: string;
   slot: PlayerSlot;
   topic: string;
+  topicZh: string;
   gameId: string;
   assignedName?: string; // Teacher can assign a name like "Player 1"
 }
@@ -81,6 +83,7 @@ export type TimeUpMessage = BaseMqttMessage<'TIME_UP', {}>;
 export interface GameResultsPayload {
   results: EvaluateDrawingsOutput;
   topic: string;
+  topicZh: string;
 }
 export type GameResultsMessage = BaseMqttMessage<'GAME_RESULTS', GameResultsPayload>;
 

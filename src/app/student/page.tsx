@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { PageWrapper } from '@/components/layout/PageWrapper';
 import { useMqtt } from '@/hooks/useMqtt';
 import { useToast } from '@/hooks/use-toast';
-import type { MqttMessage, PlayerSlot, PlayerAssignedPayload, GameStartPayload, DrawingUpdatePayload, GameResultsPayload, ErrorMessagePayload } from '@/types/mqtt';
+import type { MqttMessage, PlayerSlot, PlayerAssignedPayload, GameStartPayload, DrawingUpdatePayload, GameResultsPayload, ErrorMessagePayload, NewGameAnnouncementPayload } from '@/types/mqtt';
 import { DrawingCanvas } from '@/components/game/DrawingCanvas';
 import { CountdownTimer } from '@/components/game/CountdownTimer';
 import { ResultsDisplay } from '@/components/game/ResultsDisplay';
@@ -21,6 +21,7 @@ type StudentGameState = 'idle' | 'waiting_for_assignment' | 'ready_to_draw' | 'd
 export default function StudentPage() {
   const [gameState, setGameState] = useState<StudentGameState>('idle');
   const [topic, setTopic] = useState<string>('');
+  const [topicZh, setTopicZh] = useState<string>('');
   const [mySlot, setMySlot] = useState<PlayerSlot | null>(null);
   const [myName, setMyName] = useState<string>('You');
   const [opponentName, setOpponentName] = useState<string>('Opponent');
@@ -40,7 +41,7 @@ export default function StudentPage() {
     if (handleMqttMessageCallbackRef.current) {
       handleMqttMessageCallbackRef.current(receivedTopic, message);
     }
-  }, []); // Empty dependency array makes this wrapper stable
+  }, []); 
 
   const { publish, isConnected, getClientId } = useMqtt({ 
     onMessage: stableOnMessageHandler 
@@ -51,10 +52,10 @@ export default function StudentPage() {
     // getClientId() will be called inside switch cases where needed
     switch (message.type) {
       case 'NEW_GAME_ANNOUNCEMENT':
-        // If student joins mid-announcement or page reloads
         if (gameState === 'idle' || gameState === 'waiting_for_assignment') {
-          setTopic(message.payload.topic);
-          // Student still needs to join
+          const announcePayload = message.payload as NewGameAnnouncementPayload;
+          setTopic(announcePayload.topic);
+          setTopicZh(announcePayload.topicZh);
         }
         break;
       case 'PLAYER_ASSIGNED':
@@ -62,6 +63,7 @@ export default function StudentPage() {
         if (assignPayload.studentId === getClientId()) {
           setMySlot(assignPayload.slot);
           setTopic(assignPayload.topic);
+          setTopicZh(assignPayload.topicZh);
           setGameState('ready_to_draw');
           setMyName(assignPayload.assignedName || (assignPayload.slot === 'player1' ? "Player 1" : "Player 2"));
           setOpponentName(assignPayload.slot === 'player1' ? "Player 2" : "Player 1");
@@ -69,11 +71,11 @@ export default function StudentPage() {
         }
         break;
       case 'GAME_START':
-        if (mySlot) { // Only if assigned
+        if (mySlot) { 
           const startPayload = message.payload as GameStartPayload;
           setTimeLeft(startPayload.duration);
           setGameState('drawing');
-          setIsTimerRunning(true);
+          setIsTimerRunning(true); // Timer might still be controlled by teacher, but student UI won't show it
           toast({ title: 'Game Started!', description: 'Time to draw!' });
         }
         break;
@@ -91,7 +93,8 @@ export default function StudentPage() {
       case 'GAME_RESULTS':
         const resultsPayload = message.payload as GameResultsPayload;
         setResults(resultsPayload.results);
-        setTopic(resultsPayload.topic); // Update topic just in case it changed or for display
+        setTopic(resultsPayload.topic); 
+        setTopicZh(resultsPayload.topicZh);
         setGameState('results');
         setIsTimerRunning(false);
         break;
@@ -100,12 +103,12 @@ export default function StudentPage() {
         if (!errorPayload.forStudentId || errorPayload.forStudentId === getClientId()) {
           toast({ title: 'Game Message', description: errorPayload.message, variant: 'destructive' });
           if (errorPayload.message.toLowerCase().includes("full")) {
-            setGameState('idle'); // Reset to allow trying again
+            setGameState('idle'); 
           }
         }
         break;
     }
-  }, [mySlot, gameState, getClientId, toast, setMySlot, setTopic, setGameState, setMyName, setOpponentName, setIsTimerRunning, setTimeLeft, setOpponentDrawingData, setResults]);
+  }, [mySlot, gameState, getClientId, toast, setMySlot, setTopic, setTopicZh, setGameState, setMyName, setOpponentName, setIsTimerRunning, setTimeLeft, setOpponentDrawingData, setResults]);
 
 
   useEffect(() => {
@@ -125,7 +128,7 @@ export default function StudentPage() {
   
   const handleDrawEnd = (dataUrl: string) => {
     setMyDrawingData(dataUrl);
-    if (mySlot && gameState === 'drawing') {
+    if (mySlot && gameState === 'drawing') { // Ensure drawing is active for this student
       publish({ type: 'DRAWING_UPDATE', payload: { slot: mySlot, drawingData: dataUrl } });
     }
   };
@@ -170,7 +173,10 @@ export default function StudentPage() {
           <div className="w-full max-w-6xl mx-auto space-y-4 flex-grow flex flex-col">
             <Card className="shadow-md">
               <CardHeader>
-                <CardTitle className="text-xl text-primary">Topic: <span className="font-semibold text-accent">{topic || "Waiting for topic..."}</span></CardTitle>
+                <CardTitle className="text-xl text-primary">
+                  Topic (EN): <span className="font-semibold text-accent">{topic || "Waiting for topic..."}</span>
+                  {topicZh && <span className="block font-normal text-accent/80 text-lg mt-1">Topic (中): {topicZh}</span>}
+                </CardTitle>
                  <CardDescription>You are: <span className="font-bold text-primary">{myName}</span></CardDescription>
               </CardHeader>
               <CardContent>
@@ -178,39 +184,58 @@ export default function StudentPage() {
               </CardContent>
             </Card>
             
-            {isTimerRunning && gameState === 'drawing' && (
+            {gameState !== 'drawing' && isTimerRunning && (
                  <CountdownTimer initialSeconds={timeLeft} isRunning={isTimerRunning} className="bg-card border border-border" textClassName="text-accent"/>
             )}
             
-            <div className="flex-grow grid md:grid-cols-2 gap-4 items-start">
-              <Card className="h-full flex flex-col">
-                <CardHeader><CardTitle className="flex items-center"><User className="mr-2 w-5 h-5 text-primary"/>{myName}'s Canvas</CardTitle></CardHeader>
-                <CardContent className="flex-grow flex items-center justify-center">
-                  <DrawingCanvas
-                    width={canvasWidth}
-                    height={canvasHeight}
-                    onDrawEnd={handleDrawEnd}
-                    isDrawingEnabled={gameState === 'drawing'}
-                    initialDataUrl={myDrawingData}
-                  />
-                </CardContent>
-              </Card>
-              <Card className="h-full flex flex-col">
-                <CardHeader><CardTitle className="flex items-center"><ImageIcon className="mr-2 w-5 h-5 text-secondary"/>{opponentName}'s Drawing</CardTitle></CardHeader>
-                <CardContent className="flex-grow flex items-center justify-center p-2">
-                  <div className="aspect-[4/3] w-full max-w-[600px] bg-muted rounded-md overflow-hidden border border-input flex items-center justify-center">
-                    <Image 
-                      src={opponentDrawingData} 
-                      alt="Opponent's drawing" 
-                      width={canvasWidth} 
-                      height={canvasHeight} 
-                      className="object-contain w-full h-full"
-                      data-ai-hint="opponent drawing"
-                      unoptimized={opponentDrawingData.startsWith('data:image')}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
+            <div className="flex-grow items-start">
+              {gameState === 'drawing' ? (
+                <div className="flex flex-col items-center justify-start pt-4 h-full">
+                  <Card className="w-full max-w-2xl h-full flex flex-col shadow-xl">
+                    <CardHeader><CardTitle className="flex items-center"><User className="mr-2 w-5 h-5 text-primary"/>{myName}'s Canvas</CardTitle></CardHeader>
+                    <CardContent className="flex-grow flex items-center justify-center">
+                      <DrawingCanvas
+                        width={canvasWidth}
+                        height={canvasHeight}
+                        onDrawEnd={handleDrawEnd}
+                        isDrawingEnabled={true}
+                        initialDataUrl={myDrawingData}
+                      />
+                    </CardContent>
+                  </Card>
+                </div>
+              ) : (
+                <div className="grid md:grid-cols-2 gap-4 h-full">
+                  <Card className="h-full flex flex-col">
+                    <CardHeader><CardTitle className="flex items-center"><User className="mr-2 w-5 h-5 text-primary"/>{myName}'s Canvas</CardTitle></CardHeader>
+                    <CardContent className="flex-grow flex items-center justify-center">
+                      <DrawingCanvas
+                        width={canvasWidth}
+                        height={canvasHeight}
+                        onDrawEnd={() => {}} 
+                        isDrawingEnabled={false} 
+                        initialDataUrl={myDrawingData}
+                      />
+                    </CardContent>
+                  </Card>
+                  <Card className="h-full flex flex-col">
+                    <CardHeader><CardTitle className="flex items-center"><ImageIcon className="mr-2 w-5 h-5 text-secondary"/>{opponentName}'s Drawing</CardTitle></CardHeader>
+                    <CardContent className="flex-grow flex items-center justify-center p-2">
+                      <div className="aspect-[4/3] w-full max-w-[600px] bg-muted rounded-md overflow-hidden border border-input flex items-center justify-center">
+                        <Image 
+                          src={opponentDrawingData} 
+                          alt="Opponent's drawing" 
+                          width={canvasWidth} 
+                          height={canvasHeight} 
+                          className="object-contain w-full h-full"
+                          data-ai-hint="opponent drawing"
+                          unoptimized={opponentDrawingData.startsWith('data:image')}
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -219,6 +244,7 @@ export default function StudentPage() {
           <ResultsDisplay 
             results={results} 
             topic={topic} 
+            topicZh={topicZh}
             drawing1DataUri={mySlot === 'player1' ? myDrawingData : opponentDrawingData} 
             drawing2DataUri={mySlot === 'player2' ? myDrawingData : opponentDrawingData}
           />
@@ -227,6 +253,7 @@ export default function StudentPage() {
             <Button onClick={() => {
                 setGameState('idle');
                 setTopic('');
+                setTopicZh('');
                 setMySlot(null);
                 setTimeLeft(0);
                 setMyDrawingData('data:,');
@@ -238,4 +265,3 @@ export default function StudentPage() {
     </PageWrapper>
   );
 }
-

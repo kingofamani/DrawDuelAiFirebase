@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
@@ -34,6 +35,7 @@ const initialPlayerState = (name: string): PlayerInfo => ({
 export default function TeacherPage() {
   const [gameState, setGameState] = useState<GameState>('idle');
   const [topic, setTopic] = useState<string>('');
+  const [topicZh, setTopicZh] = useState<string>('');
   const [gameId, setGameId] = useState<string>('');
   const [timeLeft, setTimeLeft] = useState(180); // 3 minutes
   const [isTimerRunning, setIsTimerRunning] = useState(false);
@@ -73,15 +75,15 @@ export default function TeacherPage() {
         break;
       // Add cases for other messages if teacher needs to react (e.g. PLAYER_DISCONNECTED)
     }
-  }, [player1.joined, player2.joined, topic, gameId]); // Dependencies need careful management
+  }, [player1.joined, player2.joined, topic, topicZh, gameId]); // Dependencies need careful management
 
   const { publish, isConnected, getClientId } = useMqtt({ onMessage: handleMqttMessage });
 
   const publishPlayerAssigned = (studentId: string, slot: PlayerSlot) => {
-    if (topic && gameId) {
+    if (topic && topicZh && gameId) {
       publish({
         type: 'PLAYER_ASSIGNED',
-        payload: { studentId, slot, topic, gameId, assignedName: slot === 'player1' ? "Player 1" : "Player 2" },
+        payload: { studentId, slot, topic, topicZh, gameId, assignedName: slot === 'player1' ? "Player 1" : "Player 2" },
       });
     }
   };
@@ -92,15 +94,16 @@ export default function TeacherPage() {
     setPlayer1(initialPlayerState("Player 1"));
     setPlayer2(initialPlayerState("Player 2"));
     try {
-      const { topic: newTopic } = await generateDrawingTopic({});
+      const { topic: newTopic, topicZh: newTopicZh } = await generateDrawingTopic({});
       const newGameId = `game_${Date.now()}`;
       setTopic(newTopic);
+      setTopicZh(newTopicZh);
       setGameId(newGameId);
       setGameState('waiting_for_players');
       setTimeLeft(180); // Reset timer
       setIsTimerRunning(false);
-      publish({ type: 'NEW_GAME_ANNOUNCEMENT', payload: { topic: newTopic, gameId: newGameId } });
-      toast({ title: 'New Game Created!', description: `Topic: ${newTopic}` });
+      publish({ type: 'NEW_GAME_ANNOUNCEMENT', payload: { topic: newTopic, topicZh: newTopicZh, gameId: newGameId } });
+      toast({ title: 'New Game Created!', description: `Topic (EN): ${newTopic}` });
     } catch (error) {
       console.error('Failed to generate topic:', error);
       toast({ title: 'Error', description: 'Could not generate a drawing topic.', variant: 'destructive' });
@@ -135,13 +138,13 @@ export default function TeacherPage() {
 
 
       const aiResults = await evaluateDrawings({
-        topic,
+        topic, // Send English topic for AI evaluation context
         drawing1DataUri: drawing1ToEvaluate,
         drawing2DataUri: drawing2ToEvaluate,
       });
       setResults(aiResults);
       setGameState('results');
-      publish({ type: 'GAME_RESULTS', payload: { results: aiResults, topic } });
+      publish({ type: 'GAME_RESULTS', payload: { results: aiResults, topic, topicZh } });
       toast({ title: 'Judgment Complete!', description: 'Results are in.' });
     } catch (error) {
       console.error('Failed to evaluate drawings:', error);
@@ -149,7 +152,7 @@ export default function TeacherPage() {
       setGameState('idle'); // Or some error state
     }
     setIsJudging(false);
-  }, [topic, player1.drawingData, player2.drawingData, publish, toast]);
+  }, [topic, topicZh, player1.drawingData, player2.drawingData, publish, toast]);
 
 
   const PlayerCard = ({ player, slot }: { player: PlayerInfo, slot: PlayerSlot }) => (
@@ -174,6 +177,7 @@ export default function TeacherPage() {
               height={300} 
               className="object-contain w-full h-full"
               data-ai-hint="student drawing"
+              unoptimized={player.drawingData.startsWith('data:image')}
             />
           )}
         </div>
@@ -194,7 +198,10 @@ export default function TeacherPage() {
           </CardHeader>
           <CardContent>
             {topic ? (
-              <p className="text-2xl font-semibold text-accent">{topic}</p>
+              <>
+                <p className="text-2xl font-semibold text-accent">{topic}</p>
+                {topicZh && <p className="text-xl font-semibold text-accent/80 mt-1">{topicZh}</p>}
+              </>
             ) : (
               <p className="text-muted-foreground">Click "New Game" to generate a topic.</p>
             )}
@@ -250,7 +257,7 @@ export default function TeacherPage() {
               </Card>
             )}
             {results && gameState === 'results' && (
-                <ResultsDisplay results={results} topic={topic} drawing1DataUri={player1.drawingData} drawing2DataUri={player2.drawingData} />
+                <ResultsDisplay results={results} topic={topic} topicZh={topicZh} drawing1DataUri={player1.drawingData} drawing2DataUri={player2.drawingData} />
             )}
           </div>
         </div>

@@ -6,11 +6,12 @@ import Image from 'next/image';
 interface ResultsDisplayProps {
   results: EvaluateDrawingsOutput;
   topic: string;
-  drawing1DataUri?: string; // Optional, to display the drawing
-  drawing2DataUri?: string; // Optional, to display the drawing
+  topicZh?: string;
+  drawing1DataUri?: string; 
+  drawing2DataUri?: string; 
 }
 
-export function ResultsDisplay({ results, topic, drawing1DataUri, drawing2DataUri }: ResultsDisplayProps) {
+export function ResultsDisplay({ results, topic, topicZh, drawing1DataUri, drawing2DataUri }: ResultsDisplayProps) {
   const getWinnerHighlightClass = (player: 'drawing1' | 'drawing2' | 'tie') => {
     if (results.winner === player) {
       return 'border-accent ring-2 ring-accent shadow-lg scale-105';
@@ -25,12 +26,14 @@ export function ResultsDisplay({ results, topic, drawing1DataUri, drawing2DataUr
     playerName,
     score,
     feedback,
+    feedbackZh,
     drawingDataUri,
     highlightClass,
   }: {
     playerName: string;
     score: number;
     feedback: string;
+    feedbackZh: string;
     drawingDataUri?: string;
     highlightClass: string;
   }) => (
@@ -39,7 +42,7 @@ export function ResultsDisplay({ results, topic, drawing1DataUri, drawing2DataUr
         <CardTitle className="text-2xl text-center text-primary">{playerName}</CardTitle>
         {drawingDataUri && (
           <div className="mt-2 aspect-video relative w-full rounded-md overflow-hidden border">
-             <Image src={drawingDataUri} alt={`${playerName} drawing`} layout="fill" objectFit="contain" data-ai-hint="evaluated drawing" />
+             <Image src={drawingDataUri} alt={`${playerName} drawing`} layout="fill" objectFit="contain" data-ai-hint="evaluated drawing" unoptimized={drawingDataUri.startsWith('data:image')}/>
           </div>
         )}
       </CardHeader>
@@ -49,8 +52,14 @@ export function ResultsDisplay({ results, topic, drawing1DataUri, drawing2DataUr
           {score} <span className="text-2xl text-muted-foreground">/100</span>
         </div>
         <div className="text-center">
-          <p className="text-sm text-muted-foreground italic">Feedback:</p>
+          <p className="text-sm text-muted-foreground italic">Feedback (EN):</p>
           <p className="text-foreground/90 text-center break-words">&quot;{feedback}&quot;</p>
+          {feedbackZh && (
+            <>
+              <p className="text-sm text-muted-foreground italic mt-2">Feedback (中):</p>
+              <p className="text-foreground/90 text-center break-words">&quot;{feedbackZh}&quot;</p>
+            </>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -64,7 +73,8 @@ export function ResultsDisplay({ results, topic, drawing1DataUri, drawing2DataUr
             <Trophy className="w-10 h-10 mr-3" /> Game Over!
           </CardTitle>
           <CardDescription className="text-primary-foreground/80 text-lg">
-            Topic was: &quot;{topic}&quot;
+            Topic (EN): &quot;{topic}&quot;
+            {topicZh && <span className="block mt-1 text-md">Topic (中): &quot;{topicZh}&quot;</span>}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -79,6 +89,7 @@ export function ResultsDisplay({ results, topic, drawing1DataUri, drawing2DataUr
           playerName="Player 1"
           score={results.drawing1Score}
           feedback={results.drawing1Feedback}
+          feedbackZh={results.drawing1FeedbackZh}
           drawingDataUri={drawing1DataUri}
           highlightClass={getWinnerHighlightClass('drawing1')}
         />
@@ -86,6 +97,7 @@ export function ResultsDisplay({ results, topic, drawing1DataUri, drawing2DataUr
           playerName="Player 2"
           score={results.drawing2Score}
           feedback={results.drawing2Feedback}
+          feedbackZh={results.drawing2FeedbackZh}
           drawingDataUri={drawing2DataUri}
           highlightClass={getWinnerHighlightClass('drawing2')}
         />
