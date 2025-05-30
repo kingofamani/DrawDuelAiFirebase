@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { PageWrapper } from '@/components/layout/PageWrapper';
 import { useMqtt } from '@/hooks/useMqtt';
@@ -33,6 +33,8 @@ const initialPlayerState = (name: string): PlayerInfo => ({
   joined: false,
 });
 
+const MUSIC_URL = '/audio/tense-loop.mp3'; // User needs to replace this file in public/audio
+
 
 export default function TeacherPage() {
   const [gameState, setGameState] = useState<GameState>('idle');
@@ -50,6 +52,7 @@ export default function TeacherPage() {
   const [isGeneratingTopic, setIsGeneratingTopic] = useState(false);
   const [isJudging, setIsJudging] = useState(false);
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const { toast } = useToast();
 
   const handleMqttMessage = useCallback((receivedTopic: string, message: MqttMessage) => {
@@ -64,7 +67,6 @@ export default function TeacherPage() {
           setPlayer2(prev => ({ ...prev, id: payload.studentId, joined: true, drawingData: 'https://placehold.co/400x300.png?text=Joined!' }));
           publishPlayerAssigned(payload.studentId, 'player2');
         } else {
-          // Game full, optionally send an error message
           publish({type: 'ERROR_MESSAGE', payload: {message: "Game is full.", forStudentId: payload.studentId }});
         }
         break;
@@ -76,11 +78,47 @@ export default function TeacherPage() {
           setPlayer2(prev => ({ ...prev, drawingData }));
         }
         break;
-      // Add cases for other messages if teacher needs to react (e.g. PLAYER_DISCONNECTED)
     }
-  }, [player1.joined, player2.joined, topic, topicZh, gameId]); // Dependencies need careful management
+  }, [player1.joined, player2.joined, topic, topicZh, gameId]); // Dependencies updated in later step by AI
 
   const { publish, isConnected, getClientId } = useMqtt({ onMessage: handleMqttMessage });
+  
+  // Effect for handling audio playback based on gameState
+  useEffect(() => {
+    if (!audioRef.current) {
+      try {
+        audioRef.current = new Audio(MUSIC_URL);
+        audioRef.current.loop = true;
+      } catch (e) {
+          console.error("Failed to initialize audio:", e);
+          toast({ title: 'Audio Error', description: 'Could not load background music.', variant: 'destructive' });
+      }
+    }
+    
+    if (audioRef.current) {
+        if (gameState === 'drawing') {
+          audioRef.current.play().catch(error => {
+            console.error("Error playing audio:", error);
+            // toast({ title: 'Audio Playback Failed', description: 'Could not play background music.', variant: 'default' });
+          });
+        } else {
+          // Pause on judging, results, or if going back to idle.
+          if (['judging', 'results', 'idle'].includes(gameState)) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+          }
+        }
+    }
+
+    // Cleanup audio on component unmount
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        // audioRef.current.src = ''; // Keep src to avoid re-download if component re-renders quickly
+      }
+    };
+  }, [gameState, toast]);
+
 
   const publishPlayerAssigned = (studentId: string, slot: PlayerSlot) => {
     if (topic && topicZh && gameId) {
@@ -88,6 +126,10 @@ export default function TeacherPage() {
         type: 'PLAYER_ASSIGNED',
         payload: { studentId, slot, topic, topicZh, gameId, assignedName: slot === 'player1' ? "Player 1" : "Player 2" },
       });
+    } else {
+      // This case should ideally not happen if new game is always created before assignment
+      console.warn("Attempted to publish player assignment without topic/gameId");
+       toast({ title: 'Assignment Warning', description: 'Topic or Game ID missing. Cannot assign player fully.', variant: 'default' });
     }
   };
 
@@ -96,6 +138,13 @@ export default function TeacherPage() {
     setResults(null);
     setPlayer1(initialPlayerState("Player 1"));
     setPlayer2(initialPlayerState("Player 2"));
+    setGameState('idle'); // Reset to idle before fetching topic
+
+    if (audioRef.current) { // Stop music if a new game is started abruptly
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+    }
+
     try {
       const { topic: newTopic, topicZh: newTopicZh } = await generateDrawingTopic({});
       const newGameId = `game_${Date.now()}`;
@@ -103,25 +152,31 @@ export default function TeacherPage() {
       setTopicZh(newTopicZh);
       setGameId(newGameId);
       setGameState('waiting_for_players');
-      setTimeLeft(gameDurationInSeconds); // Reset timer based on configured duration
+      setTimeLeft(gameDurationInSeconds);
       setIsTimerRunning(false);
       publish({ type: 'NEW_GAME_ANNOUNCEMENT', payload: { topic: newTopic, topicZh: newTopicZh, gameId: newGameId } });
       toast({ title: 'New Game Created!', description: `Topic (EN): ${newTopic}` });
     } catch (error) {
       console.error('Failed to generate topic:', error);
       toast({ title: 'Error', description: 'Could not generate a drawing topic.', variant: 'destructive' });
+      setGameState('idle'); // Revert to idle if topic generation fails
     }
     setIsGeneratingTopic(false);
   };
 
   const handleStartGame = () => {
-    if (player1.joined && player2.joined) {
+    if (player1.joined && player2.joined && topic) { // Ensure topic is also set
       setGameState('drawing');
       setIsTimerRunning(true);
-      publish({ type: 'GAME_START', payload: { duration: timeLeft } }); // timeLeft already reflects gameDurationInSeconds
+      // TimeLeft should already be gameDurationInSeconds from handleNewGame or duration change
+      publish({ type: 'GAME_START', payload: { duration: timeLeft } }); 
       toast({ title: 'Game Started!', description: 'Players can now draw.' });
     } else {
-      toast({ title: 'Cannot Start Game', description: 'Waiting for both players to join.', variant: 'destructive' });
+      let description = 'Waiting for both players to join.';
+      if (!topic) description = 'Please create a new game to get a topic first.';
+      else if (!player1.joined || !player2.joined) description = 'Waiting for both players to join.';
+      
+      toast({ title: 'Cannot Start Game', description, variant: 'destructive' });
     }
   };
 
@@ -134,25 +189,27 @@ export default function TeacherPage() {
 
     try {
       if (!topic || !player1.drawingData || !player2.drawingData) {
+        toast({ title: 'Evaluation Error', description: 'Missing data (topic or drawings) for evaluation.', variant: 'destructive' });
         throw new Error("Missing data for evaluation.");
       }
-      const drawing1ToEvaluate = player1.drawingData === 'https://placehold.co/400x300.png?text=Joined!' || player1.drawingData === 'https://placehold.co/400x300.png?text=Waiting...' ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' : player1.drawingData; // Send blank if placeholder
+      const drawing1ToEvaluate = player1.drawingData === 'https://placehold.co/400x300.png?text=Joined!' || player1.drawingData === 'https://placehold.co/400x300.png?text=Waiting...' ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' : player1.drawingData; 
       const drawing2ToEvaluate = player2.drawingData === 'https://placehold.co/400x300.png?text=Joined!' || player2.drawingData === 'https://placehold.co/400x300.png?text=Waiting...' ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' : player2.drawingData;
 
 
       const aiResults = await evaluateDrawings({
-        topic, // Send English topic for AI evaluation context
+        topic, 
+        topicZh, // Pass topicZh for context if AI model uses it, schema needs update if so
         drawing1DataUri: drawing1ToEvaluate,
         drawing2DataUri: drawing2ToEvaluate,
       });
       setResults(aiResults);
       setGameState('results');
-      publish({ type: 'GAME_RESULTS', payload: { results: aiResults, topic, topicZh } });
+      publish({ type: 'GAME_RESULTS', payload: { results: aiResults, topic, topicZh } }); // ensure topicZh is sent
       toast({ title: 'Judgment Complete!', description: 'Results are in.' });
     } catch (error) {
       console.error('Failed to evaluate drawings:', error);
       toast({ title: 'Evaluation Error', description: 'Could not evaluate drawings.', variant: 'destructive' });
-      setGameState('idle'); // Or some error state
+      setGameState('waiting_for_players'); 
     }
     setIsJudging(false);
   }, [topic, topicZh, player1.drawingData, player2.drawingData, publish, toast]);
@@ -190,12 +247,11 @@ export default function TeacherPage() {
   
   const handleDurationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const minutes = parseInt(event.target.value, 10);
-    if (!isNaN(minutes) && minutes > 0) {
-      setGameDurationInSeconds(minutes * 60);
-      setTimeLeft(minutes*60); // also update timeLeft if game not started
-    } else if (event.target.value === '') {
-       setGameDurationInSeconds(60); // Default to 1 minute if empty
-       setTimeLeft(60);
+    const newDurationSeconds = isNaN(minutes) || minutes <= 0 ? 60 : minutes * 60;
+    
+    setGameDurationInSeconds(newDurationSeconds);
+    if (gameState !== 'drawing' && gameState !== 'judging') {
+       setTimeLeft(newDurationSeconds); 
     }
   };
 
@@ -250,7 +306,7 @@ export default function TeacherPage() {
                     </Button>
                     <Button
                         onClick={handleStartGame}
-                        disabled={gameState !== 'waiting_for_players' || !player1.joined || !player2.joined || isTimerRunning}
+                        disabled={gameState !== 'waiting_for_players' || !player1.joined || !player2.joined || isTimerRunning || !topic}
                         className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
                     >
                         <Play className="mr-2 h-4 w-4" /> Start Game

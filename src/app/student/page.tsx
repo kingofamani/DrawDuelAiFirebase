@@ -18,6 +18,8 @@ import type { EvaluateDrawingsOutput } from '@/ai/flows/evaluate-drawings';
 
 type StudentGameState = 'idle' | 'waiting_for_assignment' | 'ready_to_draw' | 'drawing' | 'judging' | 'results' | 'game_ended_early';
 
+const MUSIC_URL = '/audio/tense-loop.mp3'; // User needs to replace this file in public/audio
+
 export default function StudentPage() {
   const [gameState, setGameState] = useState<StudentGameState>('idle');
   const [topic, setTopic] = useState<string>('');
@@ -35,6 +37,7 @@ export default function StudentPage() {
   const [results, setResults] = useState<EvaluateDrawingsOutput | null>(null);
   const { toast } = useToast();
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const handleMqttMessageCallbackRef = useRef<((topic: string, message: MqttMessage) => void) | null>(null);
 
   const stableOnMessageHandler = useCallback((receivedTopic: string, message: MqttMessage) => {
@@ -75,7 +78,7 @@ export default function StudentPage() {
           const startPayload = message.payload as GameStartPayload;
           setTimeLeft(startPayload.duration);
           setGameState('drawing');
-          setIsTimerRunning(true); // Timer might still be controlled by teacher, but student UI won't show it
+          // Student timer is hidden, setIsTimerRunning(true); 
           toast({ title: 'Game Started!', description: 'Time to draw!' });
         }
         break;
@@ -86,7 +89,7 @@ export default function StudentPage() {
         }
         break;
       case 'TIME_UP':
-        setIsTimerRunning(false);
+        // setIsTimerRunning(false); // Timer hidden for student
         setGameState('judging');
         toast({ title: 'Time Up!', description: 'Waiting for results...' });
         break;
@@ -96,7 +99,7 @@ export default function StudentPage() {
         setTopic(resultsPayload.topic); 
         setTopicZh(resultsPayload.topicZh);
         setGameState('results');
-        setIsTimerRunning(false);
+        // setIsTimerRunning(false); // Timer hidden for student
         break;
       case 'ERROR_MESSAGE':
         const errorPayload = message.payload as ErrorMessagePayload;
@@ -108,12 +111,44 @@ export default function StudentPage() {
         }
         break;
     }
-  }, [mySlot, gameState, getClientId, toast, setMySlot, setTopic, setTopicZh, setGameState, setMyName, setOpponentName, setIsTimerRunning, setTimeLeft, setOpponentDrawingData, setResults]);
+  }, [mySlot, gameState, getClientId, toast, setMySlot, setTopic, setTopicZh, setGameState, setMyName, setOpponentName, /*setIsTimerRunning,*/ setTimeLeft, setOpponentDrawingData, setResults]);
 
 
   useEffect(() => {
     handleMqttMessageCallbackRef.current = currentHandleMqttMessage;
   }, [currentHandleMqttMessage]);
+
+  useEffect(() => {
+    if (!audioRef.current) {
+      try {
+        audioRef.current = new Audio(MUSIC_URL);
+        audioRef.current.loop = true;
+      } catch (e) {
+        console.error("Failed to initialize audio:", e);
+         toast({ title: 'Audio Error', description: 'Could not load background music.', variant: 'destructive' });
+      }
+    }
+
+    if (audioRef.current) {
+        if (gameState === 'drawing') {
+          audioRef.current.play().catch(error => {
+            console.error("Error playing audio:", error);
+            // toast({ title: 'Audio Playback Failed', description: 'Could not play background music.', variant: 'default' });
+          });
+        } else {
+          audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+        }
+    }
+    
+    // Cleanup audio on component unmount
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        // audioRef.current.src = ''; // Keep src to avoid re-download if component re-renders quickly
+      }
+    };
+  }, [gameState, toast]);
 
 
   const handleJoinGame = () => {
@@ -128,7 +163,7 @@ export default function StudentPage() {
   
   const handleDrawEnd = (dataUrl: string) => {
     setMyDrawingData(dataUrl);
-    if (mySlot && gameState === 'drawing') { // Ensure drawing is active for this student
+    if (mySlot && gameState === 'drawing') { 
       publish({ type: 'DRAWING_UPDATE', payload: { slot: mySlot, drawingData: dataUrl } });
     }
   };
@@ -184,14 +219,16 @@ export default function StudentPage() {
               </CardContent>
             </Card>
             
+            {/* Timer is hidden for student during drawing phase
             {gameState !== 'drawing' && isTimerRunning && (
                  <CountdownTimer initialSeconds={timeLeft} isRunning={isTimerRunning} className="bg-card border border-border" textClassName="text-accent"/>
             )}
+            */}
             
-            <div className="flex-grow items-start">
+            <div className="flex-grow flex items-start justify-center pt-4">
               {gameState === 'drawing' ? (
-                <div className="flex flex-col items-center justify-start pt-4 h-full">
-                  <Card className="w-full max-w-2xl h-full flex flex-col shadow-xl">
+                <div className="flex flex-col items-center justify-start h-full w-full max-w-2xl">
+                  <Card className="w-full h-full flex flex-col shadow-xl">
                     <CardHeader><CardTitle className="flex items-center"><User className="mr-2 w-5 h-5 text-primary"/>{myName}'s Canvas</CardTitle></CardHeader>
                     <CardContent className="flex-grow flex items-center justify-center">
                       <DrawingCanvas
@@ -204,8 +241,8 @@ export default function StudentPage() {
                     </CardContent>
                   </Card>
                 </div>
-              ) : (
-                <div className="grid md:grid-cols-2 gap-4 h-full">
+              ) : ( // For 'ready_to_draw', 'judging', 'game_ended_early' - show both canvases if data exists
+                <div className="grid md:grid-cols-2 gap-4 h-full w-full">
                   <Card className="h-full flex flex-col">
                     <CardHeader><CardTitle className="flex items-center"><User className="mr-2 w-5 h-5 text-primary"/>{myName}'s Canvas</CardTitle></CardHeader>
                     <CardContent className="flex-grow flex items-center justify-center">
@@ -259,6 +296,10 @@ export default function StudentPage() {
                 setMyDrawingData('data:,');
                 setOpponentDrawingData('https://placehold.co/400x300.png?text=Waiting...');
                 setResults(null);
+                if (audioRef.current) {
+                  audioRef.current.pause();
+                  audioRef.current.currentTime = 0;
+                }
             }} className="mt-8">Play Again?</Button>
         )}
       </div>
