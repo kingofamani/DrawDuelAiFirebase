@@ -1,5 +1,29 @@
+
 import type { EvaluateDrawingsOutput } from '@/ai/flows/evaluate-drawings';
 
+// Logic to determine MQTT_BROKER_URL
+let determinedBrokerUrl: string;
+
+if (
+  typeof window !== 'undefined' && // Check if running in a browser environment
+  window.location && // Check if window.location is available
+  window.location.protocol === 'https:' // Check if page is loaded over HTTPS
+) {
+  // If client-side and page is HTTPS, always use WSS
+  determinedBrokerUrl = 'wss://broker.emqx.io:8084/mqtt';
+} else {
+  // For Server-Side Rendering (SSR), or client-side HTTP,
+  // or if window/window.location is not defined (e.g. during build or in non-browser environments)
+  // Fallback to NODE_ENV based logic
+  determinedBrokerUrl = process.env.NODE_ENV === 'production'
+    ? 'wss://broker.emqx.io:8084/mqtt' // Production default (usually HTTPS)
+    : 'ws://broker.emqx.io:8083/mqtt';  // Development default (usually HTTP)
+}
+
+export const MQTT_BROKER_URL = determinedBrokerUrl;
+export const MQTT_TOPIC = 'drawpkla/all';
+
+// Type definitions
 export type MqttMessageType =
   | 'NEW_GAME_ANNOUNCEMENT'
   | 'JOIN_REQUEST'
@@ -85,6 +109,5 @@ export type MqttMessage =
   | PlayerDisconnectedMessage
   | ErrorMessage;
 
-// MQTT Configuration
-export const MQTT_BROKER_URL = process.env.NODE_ENV === 'production' ? 'wss://broker.emqx.io:8084/mqtt' : 'ws://broker.emqx.io:8083/mqtt';
-export const MQTT_TOPIC = 'drawpkla/all';
+// MQTT Configuration is now handled by the logic at the top of the file
+// for MQTT_BROKER_URL and MQTT_TOPIC exports.
